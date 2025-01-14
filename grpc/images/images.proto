@@ -57,8 +57,7 @@ message ImageInfo {
   string filename = 2;
   int64 size = 3;
   string content_type = 4;
-  string created_at = 5;
-  string updated_at = 6;
+  string updated_at = 5;
 }
 
 // Ответ со списком изображений
