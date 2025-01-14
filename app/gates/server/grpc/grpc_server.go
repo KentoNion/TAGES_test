@@ -1,14 +1,18 @@
 package server
 
 import (
-	"github.com/google/uuid"
-	"golang.org/x/sync/semaphore"
+	"context"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"tages.local/app/internal/config"
+	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 	pb "tages.local/grpc/images/pb"
 )
 
@@ -148,4 +152,44 @@ func (s *server) DownloadImage(req *pb.ImageDownloadRequest, stream pb.ImageServ
 	}
 	s.log.Info(op, "finished download file")
 	return nil
+}
+
+// ListImages возвращает список доступных изображений
+func (s *server) ListImages(ctx context.Context, req *pb.ListImagesRequest) (*pb.ListImagesResponse, error) {
+	const op = "app.gates.server.ListImages"
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	start := int(req.GetPage() * req.GetPerPage())
+	end := int((req.GetPage() + 1) * req.GetPerPage())
+
+	var images []*pb.ImageInfo
+	i := 0
+
+	for id, filename := range s.files {
+		if i >= start && i < end {
+			filePath := filepath.Join(s.cfg.Pictures.Path, id)
+			fileInfo, err := os.Stat(filePath)
+			if err != nil {
+				continue
+			}
+
+			images = append(images, &pb.ImageInfo{
+				Id:        id,
+				Filename:  filename,
+				Size:      fileInfo.Size(),
+				CreatedAt: time.Unix(0, fileInfo.Sys().(*syscall.Win32FileAttributeData).CreationTime.Nanoseconds()).Format(time.RFC3339),
+				UpdatedAt: fileInfo.ModTime().Format(time.RFC3339),
+			})
+		}
+		i++
+		if i >= end {
+			break
+		}
+	}
+
+	return &pb.ListImagesResponse{
+		Images: images,
+		Total:  int32(len(s.files)),
+	}, nil
 }
