@@ -1,9 +1,12 @@
 package server
 
 import (
+	"github.com/google/uuid"
 	"golang.org/x/sync/semaphore"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"tages.local/app/internal/config"
 	pb "tages.local/grpc/images/pb"
@@ -32,4 +35,117 @@ func NewServer(cfg *config.Config, log *slog.Logger) *server {
 		cfg:         cfg,
 		log:         log,
 	}
+}
+
+// UploadImage обрабатывает загрузку изображения
+func (s *server) UploadImage(stream pb.ImageService_UploadImageServer) error {
+	const op = "app.gates.server.UploadImage"
+	// Получаем разрешение на загрузку
+	if err := s.uploadSem.Acquire(stream.Context(), 1); err != nil {
+		s.log.Error(op, "failed to acquire upload semaphore", err)
+		return err
+	}
+	defer s.uploadSem.Release(1)
+
+	var fileID string
+	var filename string
+	var fileWriter *os.File
+
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			// Завершаем загрузку и отправляем ответ
+			s.log.Info(op, "upload finished")
+			fileInfo, err := fileWriter.Stat() //точка выхода ---------------------------
+			if err != nil {
+				s.log.Error(op, "failed to stat file", err)
+				return err
+			}
+
+			return stream.SendAndClose(&pb.ImageUploadResponse{
+				Id:       fileID,
+				Filename: filename,
+				Size:     fileInfo.Size(),
+			})
+		}
+		if err != nil {
+			s.log.Error(op, "failed to receive file", err)
+			return err
+		}
+
+		// Обрабатываем первый чанк с метаданными
+		if md := req.GetMetadata(); md != nil {
+			fileID = uuid.New().String()
+			filename = md.GetFilename()
+			s.log.Info(op, "starting upload file: ", filename)
+
+			// Создаем файл
+			filePath := filepath.Join(s.cfg.Pictures.Path, fileID)
+			var err error
+			fileWriter, err = os.Create(filePath)
+			if err != nil {
+				s.log.Error(op, "failed to create file", err)
+				return err
+			}
+			defer fileWriter.Close()
+
+			// Сохраняем информацию о файле
+			s.mu.Lock()
+			s.files[fileID] = filename
+			s.mu.Unlock()
+
+			continue
+		}
+
+		// Записываем чанк в файл
+		if chunk := req.GetChunk(); chunk != nil {
+			if _, err := fileWriter.Write(chunk); err != nil {
+				s.log.Error(op, "failed to write chunk", err)
+				return err
+			}
+		}
+	}
+}
+
+// DownloadImage обрабатывает скачивание изображения
+func (s *server) DownloadImage(req *pb.ImageDownloadRequest, stream pb.ImageService_DownloadImageServer) error {
+	const op = "app.gates.server.DownloadImage"
+	// Получаем разрешение на скачивание
+	if err := s.downloadSem.Acquire(stream.Context(), 1); err != nil {
+		s.log.Error(op, "failed to acquire download semaphore", err)
+		return err
+	}
+	defer s.downloadSem.Release(1)
+
+	// Проверяем существование файла
+	id := req.GetId()
+	filePath := filepath.Join(s.cfg.Pictures.Path, id)
+	s.log.Info(op, "starting download file id: ", id)
+	file, err := os.Open(filePath)
+	if err != nil {
+		s.log.Error(op, "failed to open file", err)
+		return err
+	}
+	defer file.Close()
+
+	buffer := make([]byte, s.cfg.Grpc.ChunkSize)
+	for {
+		n, err := file.Read(buffer)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			s.log.Error(op, "failed to read file", err)
+			return err
+		}
+
+		if err := stream.Send(&pb.ImageDownloadResponse{
+			Chunk: buffer[:n],
+		}); err != nil {
+			s.log.Error(op, "failed to send chunk", err)
+			return err
+		}
+	}
+	s.log.Info(op, "finished download file")
+	return nil
 }
