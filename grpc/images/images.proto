@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package imageservice;
+
+option go_package = "./pb";
+
+// Сервис для работы с изображениями
+service ImageService {
+  rpc UploadImage(stream ImageUploadRequest) returns (ImageUploadResponse) {} // Загрузка изображения на сервер
+
+  rpc DownloadImage(ImageDownloadRequest) returns (stream ImageDownloadResponse) {} // Получение изображения с сервера
+
+  rpc ListImages(ListImagesRequest) returns (ListImagesResponse) {} // Получение списка доступных изображений
+}
+
+// Запрос на загрузку изображения
+message ImageUploadRequest {
+  // Метаданные отправляются только в первом чанке
+  oneof data {
+    ImageMetadata metadata = 1;
+    bytes chunk = 2;
+  }
+}
+
+// Метаданные изображения
+message ImageMetadata {
+  string filename = 1;
+  string content_type = 2;
+}
+
+// Ответ на загрузку изображения
+message ImageUploadResponse {
+  string id = 1;
+  string filename = 2;
+  int64 size = 3;
+}
+
+// Запрос на скачивание изображения
+message ImageDownloadRequest {
+  string id = 1;
+}
+
+// Ответ со стримом данных изображения
+message ImageDownloadResponse {
+  bytes chunk = 1;
+}
+
+// Запрос на получение списка изображений
+message ListImagesRequest {
+  int32 page = 1;
+  int32 per_page = 2;
+}
+
+// Информация об изображении в списке
+message ImageInfo {
+  string id = 1;
+  string filename = 2;
+  int64 size = 3;
+  string content_type = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+// Ответ со списком изображений
+message ListImagesResponse {
+  repeated ImageInfo images = 1;
+  int32 total = 2;
+}
