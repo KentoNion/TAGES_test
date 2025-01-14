@@ -1,0 +1,10 @@
+env: "local" #local, prod
+grpc:
+  port: :50051
+  upload_limit: 10
+  download_limit: 100
+  chunk_size: 1048576 #1MB
+pictures:
+  path: ../pictures
+logger:
+  logger_file_path: "../logs.txt" #keep empty for no log file
